@@ -5,6 +5,7 @@ import {
   chat as ollamaChat,
   listChatModels,
   ollamaHost,
+  OllamaDisconnectedError,
   OllamaError,
   OllamaTimeoutError,
   type OllamaMessage,
@@ -86,10 +87,12 @@ export function missingCredentials(provider: Provider): string | null {
 }
 
 // Groq's free tier allows far fewer tokens per minute than Anthropic's entry
-// tier. Ollama answers only a few requests per model at once, so more
-// parallel requests would only queue there.
+// tier. Ollama serves one request per model at a time unless the server runs
+// with OLLAMA_NUM_PARALLEL, so extra requests would only queue there.
 export function concurrencyFor(provider: Provider): number {
-  if (provider === "ollama") return 2;
+  if (provider === "ollama") {
+    return Math.max(1, Number(process.env.OLLAMA_NUM_PARALLEL) || 1);
+  }
   return provider === "groq" ? 4 : 8;
 }
 
@@ -321,9 +324,10 @@ function ollamaSession(
 }
 
 // Some reasoning models (e.g. Qwen 3, DeepSeek R1) return their reasoning
-// inline, and it can contain draft SVG.
+// inline, and it can contain draft SVG. A reply cut off mid-reasoning has no
+// closing tag, so an open block runs to the end.
 function stripReasoning(text: string): string {
-  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
+  return text.replace(/<think>[\s\S]*?(<\/think>|$)/g, "").trim();
 }
 
 // Groq rejects some sampled outputs with a 400 instead of returning them:
@@ -374,12 +378,18 @@ export function isFatal(error: unknown): boolean {
 // A user-facing message for an SDK error, or null when it is not one.
 export function describeApiError(error: unknown): string | null {
   if (error instanceof ProviderConfigError) return error.message;
+  if (error instanceof OllamaDisconnectedError) {
+    return "Koneksi ke Ollama terputus saat menjawab; gambar ini dilewati.";
+  }
   if (error instanceof OllamaTimeoutError) {
     return "Ollama terlalu lama menjawab (lebih dari 10 menit). Coba model yang lebih kecil atau kurangi jumlah gambar.";
   }
   if (error instanceof OllamaError) {
     if (error.status === null) {
-      return `Tidak bisa terhubung ke Ollama di ${ollamaHost()}. Pastikan Ollama sedang berjalan (buka aplikasi Ollama atau jalankan \`ollama serve\`).`;
+      const host = ollamaHost();
+      return host === null
+        ? `OLLAMA_HOST "${process.env.OLLAMA_HOST}" tidak valid. Gunakan bentuk host, host:port, atau URL.`
+        : `Tidak bisa terhubung ke Ollama di ${host}. Pastikan Ollama sedang berjalan (buka aplikasi Ollama atau jalankan \`ollama serve\`).`;
     }
     if (error.status === 404) {
       return `Model Ollama tidak ditemukan (${error.message}). Cek daftar model dengan \`ollama list\` atau ubah OLLAMA_MODEL.`;

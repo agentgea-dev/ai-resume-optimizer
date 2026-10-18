@@ -88,7 +88,10 @@ export async function generateVectorSet(
   });
   emit({
     type: "status",
-    message: `Menggambar ${items.length} vektor dengan ${modelLabel}, ${Math.min(concurrency, items.length)} sekaligus…`,
+    message:
+      concurrency === 1
+        ? `Menggambar ${items.length} vektor dengan ${modelLabel}, satu per satu…`
+        : `Menggambar ${items.length} vektor dengan ${modelLabel}, ${Math.min(concurrency, items.length)} sekaligus…`,
   });
 
   const stopAll = new AbortController();
