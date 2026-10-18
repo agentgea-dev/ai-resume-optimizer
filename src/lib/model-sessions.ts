@@ -1,12 +1,21 @@
 import Anthropic from "@anthropic-ai/sdk";
 import Groq from "groq-sdk";
 import type { DrawModel } from "@/lib/generate-types";
+import {
+  chat as ollamaChat,
+  listChatModels,
+  ollamaHost,
+  OllamaError,
+  OllamaTimeoutError,
+  type OllamaMessage,
+} from "@/lib/ollama";
 
-export type Provider = "groq" | "anthropic";
+export type Provider = "ollama" | "groq" | "anthropic";
 
-type ModelSpec =
+export type ModelSpec =
   | { provider: "anthropic"; id: string; fallback: boolean; effort: boolean }
-  | { provider: "groq"; id: string };
+  | { provider: "groq"; id: string }
+  | { provider: "ollama"; id: string };
 
 export const DEFAULT_GROQ_MODEL = "openai/gpt-oss-120b";
 
@@ -18,34 +27,54 @@ const ANTHROPIC_SPECS = {
   sonnet: { provider: "anthropic", id: "claude-sonnet-5-5", fallback: true, effort: true },
   opus: { provider: "anthropic", id: "claude-opus-5-5", fallback: true, effort: true },
   opus4: { provider: "anthropic", id: "claude-opus-4-0", fallback: false, effort: false },
-} as const satisfies Record<Exclude<DrawModel, "groq">, ModelSpec>;
+} as const satisfies Record<Exclude<DrawModel, "groq" | "ollama">, ModelSpec>;
 
 // Set explicitly: Haiku 5.5 and Opus 5.5 default to medium, Sonnet 5.5 to high.
 const ANTHROPIC_EFFORT = "medium" as const;
 
-function groqSpec(): ModelSpec {
-  return { provider: "groq", id: process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL };
-}
+// A setup problem whose message is safe to show to the user as-is.
+export class ProviderConfigError extends Error {}
 
 export function providerOf(model: DrawModel): Provider {
+  if (model === "ollama") return "ollama";
   return model === "groq" ? "groq" : "anthropic";
 }
 
-// Planning is a cheap list-making step, so it runs on the provider's small
-// default model; only the drawing model is selectable.
-export function planSpec(provider: Provider): ModelSpec {
-  return provider === "groq" ? groqSpec() : ANTHROPIC_SPECS.haiku;
+// Picks the plan and draw models. Planning is a cheap list-making step, so
+// Claude plans with Haiku; Groq and Ollama plan with the drawing model.
+export async function resolveSpecs(
+  model: DrawModel,
+  signal: AbortSignal,
+): Promise<{ plan: ModelSpec; draw: ModelSpec }> {
+  if (model === "ollama") {
+    const spec: ModelSpec = { provider: "ollama", id: await ollamaModelId(signal) };
+    return { plan: spec, draw: spec };
+  }
+  if (model === "groq") {
+    const spec: ModelSpec = {
+      provider: "groq",
+      id: process.env.GROQ_MODEL || DEFAULT_GROQ_MODEL,
+    };
+    return { plan: spec, draw: spec };
+  }
+  return { plan: ANTHROPIC_SPECS.haiku, draw: ANTHROPIC_SPECS[model] };
 }
 
-export function drawSpec(model: DrawModel): ModelSpec {
-  return model === "groq" ? groqSpec() : ANTHROPIC_SPECS[model];
-}
-
-export function modelId(model: DrawModel): string {
-  return drawSpec(model).id;
+// OLLAMA_MODEL, or else the installed chat model Ollama lists first (the most
+// recently pulled or created one).
+async function ollamaModelId(signal: AbortSignal): Promise<string> {
+  if (process.env.OLLAMA_MODEL) return process.env.OLLAMA_MODEL;
+  const [first] = await listChatModels(signal);
+  if (!first) {
+    throw new ProviderConfigError(
+      "Belum ada model chat yang terpasang di Ollama. Pasang satu dulu, misalnya `ollama pull qwen2.5-coder:7b`, atau isi OLLAMA_MODEL.",
+    );
+  }
+  return first;
 }
 
 export function missingCredentials(provider: Provider): string | null {
+  if (provider === "ollama") return null;
   if (provider === "groq") {
     return process.env.GROQ_API_KEY
       ? null
@@ -56,9 +85,11 @@ export function missingCredentials(provider: Provider): string | null {
     : "ANTHROPIC_API_KEY belum diatur di server (.env.local).";
 }
 
-// Groq's free tier allows far fewer tokens per minute than Anthropic's
-// entry tier, so it runs fewer drawings at once and retries 429s longer.
+// Groq's free tier allows far fewer tokens per minute than Anthropic's entry
+// tier. Ollama answers only a few requests per model at once, so more
+// parallel requests would only queue there.
 export function concurrencyFor(provider: Provider): number {
+  if (provider === "ollama") return 2;
   return provider === "groq" ? 4 : 8;
 }
 
@@ -109,7 +140,9 @@ const groqFetch: typeof fetch = async (input, init) => {
   });
 };
 
+// Ollama needs no client object; see src/lib/ollama.ts.
 export function createClients(provider: Provider): Clients {
+  if (provider === "ollama") return {};
   return provider === "groq"
     ? {
         groq: new Groq({
@@ -128,6 +161,7 @@ export function openSession(
   options: SessionOptions,
   clients: Clients,
 ): ChatSession {
+  if (spec.provider === "ollama") return ollamaSession(spec.id, options);
   if (spec.provider === "groq") {
     if (!clients.groq) throw new Error("Groq client is not configured");
     return groqSession(clients.groq, spec.id, options);
@@ -255,14 +289,41 @@ function groqSession(
         content = failed;
       }
       messages.push({ role: "assistant", content: content || "(no output)" });
-      return {
-        // Some reasoning models (e.g. Qwen 3) return their reasoning inline.
-        text: content.replace(/<think>[\s\S]*?<\/think>/g, "").trim(),
-        truncated,
-        refused: false,
-      };
+      return { text: stripReasoning(content), truncated, refused: false };
     },
   };
+}
+
+function ollamaSession(
+  model: string,
+  { system, jsonSchema, maxTokens, signal }: SessionOptions,
+): ChatSession {
+  const messages: OllamaMessage[] = [{ role: "system", content: system.join("\n\n") }];
+
+  return {
+    async send(turn) {
+      messages.push({
+        role: "user",
+        content: turn.text,
+        ...(turn.imagePng && { images: [turn.imagePng.toString("base64")] }),
+      });
+      const { content, truncated } = await ollamaChat({
+        model,
+        messages,
+        json: jsonSchema !== undefined,
+        maxTokens,
+        signal,
+      });
+      messages.push({ role: "assistant", content });
+      return { text: stripReasoning(content), truncated, refused: false };
+    },
+  };
+}
+
+// Some reasoning models (e.g. Qwen 3, DeepSeek R1) return their reasoning
+// inline, and it can contain draft SVG.
+function stripReasoning(text: string): string {
+  return text.replace(/<think>[\s\S]*?<\/think>/g, "").trim();
 }
 
 // Groq rejects some sampled outputs with a 400 instead of returning them:
@@ -302,12 +363,29 @@ export function isFatal(error: unknown): boolean {
     error instanceof Groq.NotFoundError ||
     (error instanceof Groq.BadRequestError &&
       groqFailedGeneration(error) === null) ||
-    isGroqQuotaExhausted(error)
+    isGroqQuotaExhausted(error) ||
+    error instanceof ProviderConfigError ||
+    // Ollama unreachable, unknown model, or a request it cannot serve.
+    (error instanceof OllamaError &&
+      (error.status === null || error.status === 404 || error.status === 400))
   );
 }
 
 // A user-facing message for an SDK error, or null when it is not one.
 export function describeApiError(error: unknown): string | null {
+  if (error instanceof ProviderConfigError) return error.message;
+  if (error instanceof OllamaTimeoutError) {
+    return "Ollama terlalu lama menjawab (lebih dari 10 menit). Coba model yang lebih kecil atau kurangi jumlah gambar.";
+  }
+  if (error instanceof OllamaError) {
+    if (error.status === null) {
+      return `Tidak bisa terhubung ke Ollama di ${ollamaHost()}. Pastikan Ollama sedang berjalan (buka aplikasi Ollama atau jalankan \`ollama serve\`).`;
+    }
+    if (error.status === 404) {
+      return `Model Ollama tidak ditemukan (${error.message}). Cek daftar model dengan \`ollama list\` atau ubah OLLAMA_MODEL.`;
+    }
+    return `Kesalahan dari Ollama (${error.status}): ${error.message}`;
+  }
   if (error instanceof Anthropic.AuthenticationError) {
     return "API key Anthropic tidak valid. Periksa ANTHROPIC_API_KEY.";
   }

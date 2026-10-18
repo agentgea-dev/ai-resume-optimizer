@@ -5,16 +5,30 @@ export const DEFAULT_COUNT = MAX_COUNT;
 export const MAX_REFINEMENTS = 2;
 export const DEFAULT_REFINEMENTS = 0;
 
-export const DRAW_MODELS = ["groq", "haiku", "sonnet", "opus", "opus4"] as const;
+export const DRAW_MODELS = [
+  "ollama",
+  "groq",
+  "haiku",
+  "sonnet",
+  "opus",
+  "opus4",
+] as const;
 export type DrawModel = (typeof DRAW_MODELS)[number];
-export const DEFAULT_DRAW_MODEL: DrawModel = "groq";
+export const DEFAULT_DRAW_MODEL: DrawModel = "ollama";
 export const DRAW_MODEL_LABELS: Record<DrawModel, string> = {
+  ollama: "Ollama",
   groq: "Groq",
   haiku: "Claude Haiku",
   sonnet: "Claude Sonnet",
   opus: "Claude Opus",
   opus4: "Claude Opus 4",
 };
+
+// Visual refinement sends the render back as an image. Groq's default model
+// and most models people run in Ollama only read text.
+export function supportsRefinement(model: DrawModel): boolean {
+  return model !== "groq" && model !== "ollama";
+}
 
 export type GenerateRequest = {
   prompt: string;
@@ -70,12 +84,10 @@ export function parseGenerateRequest(
       error: `Model penggambar harus salah satu dari: ${DRAW_MODELS.join(", ")}.`,
     };
   }
-  // Visual refinement sends the render as an image, and the default Groq
-  // models are text-only.
-  if (drawModel === "groq" && refinements > 0) {
+  if (!supportsRefinement(drawModel as DrawModel) && refinements > 0) {
     return {
       ok: false,
-      error: "Perbaikan visual belum tersedia untuk Groq. Pilih 0 putaran.",
+      error: `Perbaikan visual belum tersedia untuk ${DRAW_MODEL_LABELS[drawModel as DrawModel]}. Pilih 0 putaran.`,
     };
   }
   return {

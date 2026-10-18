@@ -24,6 +24,7 @@ import {
   DRAW_MODEL_LABELS,
   MAX_PROMPT_LENGTH,
   MAX_REFINEMENTS,
+  supportsRefinement,
   type DrawModel,
   type GenerateEvent,
 } from "@/lib/generate-types";
@@ -52,6 +53,11 @@ const REFINEMENT_CHOICES = Array.from({ length: MAX_REFINEMENTS + 1 }, (_, n) =>
 // Sonnet 5.5 $2/$10, Opus 5.5 $4/$20, Opus 4 $15/$75 per million input/output
 // tokens). Scores are from the blind-judged comparison in the README.
 const MODEL_CHOICES: { value: DrawModel; label: string; note: string }[] = [
+  {
+    value: "ollama",
+    label: "Ollama",
+    note: "Memakai model yang terinstal di Ollama di komputer ini: model yang terakhir dipasang, atau OLLAMA_MODEL. Gratis dan offline, tapi lebih lambat dan biasanya kurang akurat dibanding model cloud. Kualitasnya tergantung model yang Anda pasang.",
+  },
   {
     value: "groq",
     label: "Groq",
@@ -272,7 +278,7 @@ export function VectorGenerator() {
             value={drawModel}
             onChange={(model) => {
               setDrawModel(model);
-              if (model === "groq") setRefinements(0);
+              if (!supportsRefinement(model)) setRefinements(0);
             }}
             disabled={running}
             hint={MODEL_CHOICES.find((m) => m.value === drawModel)?.note}
@@ -282,10 +288,10 @@ export function VectorGenerator() {
             options={REFINEMENT_CHOICES}
             value={refinements}
             onChange={setRefinements}
-            disabled={running || drawModel === "groq"}
+            disabled={running || !supportsRefinement(drawModel)}
             hint={
-              drawModel === "groq"
-                ? `Perbaikan visual mengirim hasil render sebagai gambar, sedangkan model Groq default hanya membaca teks. Total sekitar ${count} panggilan ke Groq, plus 1 untuk perencanaan.`
+              !supportsRefinement(drawModel)
+                ? `Perbaikan visual mengirim hasil render sebagai gambar, sedangkan model ${DRAW_MODEL_LABELS[drawModel]} umumnya hanya membaca teks. Total sekitar ${count} panggilan ke ${DRAW_MODEL_LABELS[drawModel]}, plus 1 untuk perencanaan.`
                 : `Setiap putaran, model melihat hasil render-nya sendiri lalu memperbaikinya. Total sekitar ${count * (1 + refinements)} panggilan ke ${DRAW_MODEL_LABELS[drawModel]}, plus 1 ke Claude Haiku untuk perencanaan.`
             }
           />
@@ -440,7 +446,8 @@ function Picker<T extends string | number>({
       <div
         className="grid gap-1 rounded-lg bg-muted p-1"
         style={{
-          gridTemplateColumns: `repeat(${options.length}, minmax(0, 1fr))`,
+          // More than four choices wrap to rows of three so labels fit.
+          gridTemplateColumns: `repeat(${options.length > 4 ? 3 : options.length}, minmax(0, 1fr))`,
         }}
       >
         {options.map((option) => (

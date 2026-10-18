@@ -7,11 +7,10 @@ import {
   concurrencyFor,
   createClients,
   describeApiError,
-  drawSpec,
   isFatal,
   openSession,
-  planSpec,
   providerOf,
+  resolveSpecs,
   type ChatSession,
   type SessionOptions,
   type UserTurn,
@@ -49,6 +48,12 @@ export async function generateVectorSet(
   const provider = providerOf(drawModel);
   const clients = createClients(provider);
   const concurrency = concurrencyFor(provider);
+  const specs = await resolveSpecs(drawModel, signal);
+  // Name the model when the user did not pick it explicitly.
+  const modelLabel =
+    provider === "anthropic"
+      ? DRAW_MODEL_LABELS[drawModel]
+      : `${DRAW_MODEL_LABELS[drawModel]} (${specs.draw.id})`;
 
   emit({
     type: "status",
@@ -59,7 +64,7 @@ export async function generateVectorSet(
   });
   const { style, items } = await planSet(
     openSession(
-      planSpec(provider),
+      specs.plan,
       {
         system: [PLAN_SYSTEM_PROMPT],
         jsonSchema: PLAN_SCHEMA,
@@ -83,7 +88,7 @@ export async function generateVectorSet(
   });
   emit({
     type: "status",
-    message: `Menggambar ${items.length} vektor dengan ${DRAW_MODEL_LABELS[drawModel]}, ${Math.min(concurrency, items.length)} sekaligus…`,
+    message: `Menggambar ${items.length} vektor dengan ${modelLabel}, ${Math.min(concurrency, items.length)} sekaligus…`,
   });
 
   const stopAll = new AbortController();
@@ -101,7 +106,7 @@ export async function generateVectorSet(
   try {
     await forEachConcurrent(items, concurrency, stopAll.signal, async (item, index) => {
       try {
-        const session = openSession(drawSpec(drawModel), drawOptions, clients);
+        const session = openSession(specs.draw, drawOptions, clients);
         const result = await drawItem(session, item, refinements);
         succeeded++;
         emit({ type: "item", index, ...result });
@@ -163,10 +168,13 @@ async function planSet(
 }
 
 function parsePlan(text: string): { style: SetStyle; items: SetItem[] } | null {
+  // Models without a strict JSON mode may wrap the object in a fence or prose.
+  const start = text.indexOf("{");
+  const end = text.lastIndexOf("}");
+  if (start === -1 || end <= start) return null;
   let data: unknown;
   try {
-    // Tolerate a ```json fence from models without a strict JSON mode.
-    data = JSON.parse(text.replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, ""));
+    data = JSON.parse(text.slice(start, end + 1));
   } catch {
     return null;
   }
