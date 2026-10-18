@@ -81,9 +81,45 @@ export type SessionOptions = {
 
 export type Clients = { anthropic?: Anthropic; groq?: Groq };
 
+// groq-sdk waits as long as a 429's Retry-After asks, in a sleep that
+// cancelling cannot interrupt. A wait this long means a daily or hourly quota
+// is used up, so the request fails at once instead (see isFatal).
+const MAX_GROQ_RETRY_WAIT_S = 60;
+
+function retryAfterSeconds(headers: Headers | undefined): number {
+  const ms = Number(headers?.get("retry-after-ms"));
+  if (ms > 0) return ms / 1000;
+  return Number(headers?.get("retry-after")) || 0;
+}
+
+const groqFetch: typeof fetch = async (input, init) => {
+  const response = await fetch(input, init);
+  if (
+    response.status !== 429 ||
+    retryAfterSeconds(response.headers) <= MAX_GROQ_RETRY_WAIT_S
+  ) {
+    return response;
+  }
+  const headers = new Headers(response.headers);
+  headers.set("x-should-retry", "false");
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+};
+
 export function createClients(provider: Provider): Clients {
   return provider === "groq"
-    ? { groq: new Groq({ maxRetries: 8 }) }
+    ? {
+        groq: new Groq({
+          maxRetries: 8,
+          // Completions are not streamed, so allow for a long one; the SDK's
+          // 60 s default would cut it off and regenerate it from scratch.
+          timeout: 5 * 60 * 1000,
+          fetch: groqFetch,
+        }),
+      }
     : { anthropic: new Anthropic({ maxRetries: 5 }) };
 }
 
@@ -194,28 +230,64 @@ function groqSession(
             ]
           : turn.text,
       });
-      const completion = await client.chat.completions.create(
-        {
-          model,
-          messages,
-          max_completion_tokens: maxTokens,
-          // JSON mode works on more Groq models than strict json_schema; the
-          // caller validates the shape itself.
-          ...(jsonSchema && { response_format: { type: "json_object" } }),
-        },
-        { signal },
-      );
-      const choice = completion.choices[0];
-      const content = choice?.message.content ?? "";
-      messages.push({ role: "assistant", content });
+      let content: string;
+      let truncated = false;
+      try {
+        const completion = await client.chat.completions.create(
+          {
+            model,
+            messages,
+            max_completion_tokens: maxTokens,
+            // JSON mode works on more Groq models than strict json_schema; the
+            // caller validates the shape itself.
+            ...(jsonSchema && { response_format: { type: "json_object" } }),
+          },
+          { signal },
+        );
+        const choice = completion.choices[0];
+        content = choice?.message.content ?? "";
+        truncated = choice?.finish_reason === "length";
+      } catch (error) {
+        // A bad sample comes back as a 400 rather than a reply. Hand it to the
+        // caller as a reply so its repair or top-up logic deals with it.
+        const failed = groqFailedGeneration(error);
+        if (failed === null) throw error;
+        content = failed;
+      }
+      messages.push({ role: "assistant", content: content || "(no output)" });
       return {
         // Some reasoning models (e.g. Qwen 3) return their reasoning inline.
         text: content.replace(/<think>[\s\S]*?<\/think>/g, "").trim(),
-        truncated: choice?.finish_reason === "length",
+        truncated,
         refused: false,
       };
     },
   };
+}
+
+// Groq rejects some sampled outputs with a 400 instead of returning them:
+// JSON mode output that is not valid JSON, or a call to a tool the request
+// did not define. Returns the rejected output ("" if absent), or null for any
+// other error.
+function groqFailedGeneration(error: unknown): string | null {
+  if (!(error instanceof Groq.BadRequestError)) return null;
+  const body = (
+    error.error as
+      | { error?: { code?: string | null; failed_generation?: string | null } }
+      | undefined
+  )?.error;
+  if (typeof body?.failed_generation === "string") return body.failed_generation;
+  if (body?.code === "json_validate_failed" || body?.code === "tool_use_failed") {
+    return "";
+  }
+  return null;
+}
+
+function isGroqQuotaExhausted(error: unknown): boolean {
+  return (
+    error instanceof Groq.RateLimitError &&
+    retryAfterSeconds(error.headers) > MAX_GROQ_RETRY_WAIT_S
+  );
 }
 
 // Errors that would repeat for every request in the set.
@@ -228,7 +300,9 @@ export function isFatal(error: unknown): boolean {
     error instanceof Groq.AuthenticationError ||
     error instanceof Groq.PermissionDeniedError ||
     error instanceof Groq.NotFoundError ||
-    error instanceof Groq.BadRequestError
+    (error instanceof Groq.BadRequestError &&
+      groqFailedGeneration(error) === null) ||
+    isGroqQuotaExhausted(error)
   );
 }
 
@@ -249,17 +323,31 @@ export function describeApiError(error: unknown): string | null {
   if (error instanceof Anthropic.RateLimitError) {
     return "Batas pemakaian API Anthropic tercapai. Coba lagi sebentar lagi.";
   }
+  if (isGroqQuotaExhausted(error)) {
+    const minutes = Math.ceil(
+      retryAfterSeconds((error as InstanceType<typeof Groq.RateLimitError>).headers) / 60,
+    );
+    return `Kuota Groq habis. Coba lagi dalam sekitar ${minutes} menit, kurangi jumlah gambar, atau naikkan tier akun Groq.`;
+  }
   if (error instanceof Groq.RateLimitError) {
-    return "Batas pemakaian Groq tercapai (token per menit). Coba lagi nanti, kurangi jumlah gambar, atau naikkan tier akun Groq.";
+    return "Batas pemakaian Groq tercapai. Coba lagi sebentar lagi atau kurangi jumlah gambar.";
   }
   if (error instanceof Groq.BadRequestError) {
-    return "Groq menolak permintaan (400). Jika GROQ_MODEL diganti, pastikan model itu mendukung JSON mode dan output panjang.";
+    return process.env.GROQ_MODEL
+      ? `Groq menolak permintaan (400). Pastikan GROQ_MODEL "${process.env.GROQ_MODEL}" mendukung JSON mode dan output panjang.`
+      : "Groq menolak permintaan (400).";
   }
   if (error instanceof Anthropic.APIError && error.status !== undefined) {
     return `Kesalahan dari API Anthropic (${error.status}).`;
   }
   if (error instanceof Groq.APIError && error.status !== undefined) {
     return `Kesalahan dari API Groq (${error.status}).`;
+  }
+  if (error instanceof Anthropic.APIConnectionTimeoutError) {
+    return "Permintaan ke API Anthropic melebihi batas waktu.";
+  }
+  if (error instanceof Groq.APIConnectionTimeoutError) {
+    return "Permintaan ke Groq melebihi batas waktu.";
   }
   if (error instanceof Anthropic.APIConnectionError) {
     return "Tidak bisa terhubung ke API Anthropic.";
