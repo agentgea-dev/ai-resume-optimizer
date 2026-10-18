@@ -49,11 +49,12 @@ const REFINEMENT_CHOICES = Array.from({ length: MAX_REFINEMENTS + 1 }, (_, n) =>
   label: String(n),
 }));
 // Relative cost per drawing at list price (Haiku 5.5 $0.10/$0.50, Sonnet 5.5
-// $2/$10, Opus 5.5 $4/$20 per million input/output tokens).
+// $2/$10, Opus 5.5 $4/$20, Opus 4 $15/$75 per million input/output tokens).
 const MODEL_CHOICES: { value: DrawModel; label: string; cost: string }[] = [
   { value: "haiku", label: "Haiku", cost: "1×" },
   { value: "sonnet", label: "Sonnet", cost: "20×" },
   { value: "opus", label: "Opus", cost: "40×" },
+  { value: "opus4", label: "Opus 4", cost: "150×" },
 ];
 
 export function VectorGenerator() {
@@ -249,7 +250,11 @@ export function VectorGenerator() {
             value={drawModel}
             onChange={setDrawModel}
             disabled={running}
-            hint={`Model yang lebih kuat menggambar lebih akurat, tapi lebih lambat dan lebih mahal. Biaya per gambar ${DRAW_MODEL_LABELS[drawModel]} kira-kira ${MODEL_CHOICES.find((m) => m.value === drawModel)?.cost} biaya Haiku.`}
+            hint={`${
+              drawModel === "opus4"
+                ? "Opus 4 adalah model lama yang sudah deprecated dan bisa dihentikan Anthropic sewaktu-waktu."
+                : "Model yang lebih kuat menggambar lebih akurat, tapi lebih lambat dan lebih mahal."
+            } Biaya per gambar ${DRAW_MODEL_LABELS[drawModel]} kira-kira ${MODEL_CHOICES.find((m) => m.value === drawModel)?.cost} biaya Haiku.`}
           />
           <Picker
             legend="Perbaikan visual per gambar"

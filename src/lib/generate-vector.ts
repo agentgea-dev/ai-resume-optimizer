@@ -22,12 +22,15 @@ import { extractSvg, renderPng } from "@/lib/svg";
 
 // Planning is a cheap list-making step; only the drawing model is selectable.
 const PLAN_MODEL = "claude-haiku-5-5";
+type DrawModelConfig = { id: string; fallback: boolean; effort: boolean };
 // Haiku 5.5 has no server-side fallback. Sonnet 5.5 and Opus 5.5 retry a
 // declined drawing on Anthropic's recommended model instead of failing it.
-const DRAW_MODEL_IDS: Record<DrawModel, { id: string; fallback: boolean }> = {
-  haiku: { id: "claude-haiku-5-5", fallback: false },
-  sonnet: { id: "claude-sonnet-5-5", fallback: true },
-  opus: { id: "claude-opus-5-5", fallback: true },
+// Opus 4 is deprecated and supports neither fallback nor the effort setting.
+const DRAW_MODEL_IDS: Record<DrawModel, DrawModelConfig> = {
+  haiku: { id: "claude-haiku-5-5", fallback: false, effort: true },
+  sonnet: { id: "claude-sonnet-5-5", fallback: true, effort: true },
+  opus: { id: "claude-opus-5-5", fallback: true, effort: true },
+  opus4: { id: "claude-opus-4-0", fallback: false, effort: false },
 };
 // Set explicitly: Haiku 5.5 and Opus 5.5 default to medium, Sonnet 5.5 to high.
 const EFFORT = "medium";
@@ -211,7 +214,7 @@ function parsePlan(text: string): { style: SetStyle; items: SetItem[] } | null {
 
 async function drawItem(
   client: Anthropic,
-  model: { id: string; fallback: boolean },
+  model: DrawModelConfig,
   system: Anthropic.Beta.BetaTextBlockParam[],
   item: SetItem,
   refinements: number,
@@ -232,7 +235,7 @@ async function drawItem(
         {
           model: model.id,
           max_tokens: 16_000,
-          output_config: { effort: EFFORT },
+          ...(model.effort && { output_config: { effort: EFFORT } }),
           system,
           messages,
           ...(model.fallback && {

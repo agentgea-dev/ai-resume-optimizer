@@ -39,7 +39,8 @@ Buka http://localhost:3000.
 
 ## Model, waktu, dan biaya
 
-- Perencanaan selalu memakai `claude-haiku-5-5`. Model penggambar dipilih di UI: Haiku (`claude-haiku-5-5`, default), Sonnet (`claude-sonnet-5-5`), atau Opus (`claude-opus-5-5`), semuanya dengan effort `medium` (`src/lib/generate-vector.ts`). Model yang lebih kuat menggambar lebih akurat. Biaya per gambar kira-kira 1× / 20× / 40× menurut harga per token.
+- Perencanaan selalu memakai `claude-haiku-5-5`. Model penggambar dipilih di UI: Haiku (`claude-haiku-5-5`, default), Sonnet (`claude-sonnet-5-5`), Opus (`claude-opus-5-5`), atau Opus 4 (`claude-opus-4-0`), dengan effort `medium` (`src/lib/generate-vector.ts`). Biaya per gambar kira-kira 1× / 20× / 40× / 150× menurut harga per token.
+- Dalam uji buta (4 subjek, skala 1–10) Sonnet dan Opus 5.5 sama-sama mendapat 6,3 dan Haiku 5,0. Opus 4 belum diuji; model ini sudah deprecated, tidak mendukung parameter effort maupun fallback, dan bisa dihentikan Anthropic sewaktu-waktu.
 - Sonnet dan Opus memakai server-side fallback (`fallbacks: "default"`), jadi gambar yang ditolak classifier keamanan dicoba ulang di model lain. Haiku 5.5 tidak punya fallback, jadi penolakan ditandai gagal per gambar.
 - Satu set = 1 panggilan perencanaan + `N × (1 + putaran perbaikan)` panggilan menggambar (ditambah perbaikan SVG tidak valid bila perlu). 100 gambar tanpa perbaikan ≈ 101 panggilan.
 - `CONCURRENCY = 8` menjaga laju di bawah batas requests-per-minute akun tingkat awal; naikkan kalau tier akun Anda lebih tinggi. SDK otomatis mencoba ulang 429/5xx sampai 5 kali.

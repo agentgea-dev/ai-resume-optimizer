@@ -5,13 +5,14 @@ export const DEFAULT_COUNT = MAX_COUNT;
 export const MAX_REFINEMENTS = 2;
 export const DEFAULT_REFINEMENTS = 0;
 
-export const DRAW_MODELS = ["haiku", "sonnet", "opus"] as const;
+export const DRAW_MODELS = ["haiku", "sonnet", "opus", "opus4"] as const;
 export type DrawModel = (typeof DRAW_MODELS)[number];
 export const DEFAULT_DRAW_MODEL: DrawModel = "haiku";
 export const DRAW_MODEL_LABELS: Record<DrawModel, string> = {
   haiku: "Claude Haiku",
   sonnet: "Claude Sonnet",
   opus: "Claude Opus",
+  opus4: "Claude Opus 4",
 };
 
 export type GenerateRequest = {
