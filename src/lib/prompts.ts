@@ -13,7 +13,9 @@ Fields:
 - title: a short name (1 to 4 words) in the same language as the theme.
 - description: one or two sentences in English saying what to draw: the subject, its key parts, and the composition.
 - style.palette: 6 to 8 hex colors (#RRGGBB) shared by the whole set: first the outline color ${OUTLINE_COLOR}, then a base and a darker shadow tone for two or three neutral materials that suit the theme, then one saturated accent color and its shadow tone.
-- style.notes: one or two sentences on what the set has in common beyond the palette (for example level of detail, recurring motifs, character proportions).`;
+- style.notes: one or two sentences on what the set has in common beyond the palette (for example level of detail, recurring motifs, character proportions).
+
+Reply with only a JSON object of this shape: {"style": {"palette": ["#RRGGBB", ...], "notes": "..."}, "items": [{"title": "...", "description": "..."}, ...]}`;
 
 export const PLAN_SCHEMA = {
   type: "object",

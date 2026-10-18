@@ -48,13 +48,35 @@ const REFINEMENT_CHOICES = Array.from({ length: MAX_REFINEMENTS + 1 }, (_, n) =>
   value: n,
   label: String(n),
 }));
-// Relative cost per drawing at list price (Haiku 5.5 $0.10/$0.50, Sonnet 5.5
-// $2/$10, Opus 5.5 $4/$20, Opus 4 $15/$75 per million input/output tokens).
-const MODEL_CHOICES: { value: DrawModel; label: string; cost: string }[] = [
-  { value: "haiku", label: "Haiku", cost: "1×" },
-  { value: "sonnet", label: "Sonnet", cost: "20×" },
-  { value: "opus", label: "Opus", cost: "40×" },
-  { value: "opus4", label: "Opus 4", cost: "150×" },
+// Claude costs are relative per drawing at list price (Haiku 5.5 $0.10/$0.50,
+// Sonnet 5.5 $2/$10, Opus 5.5 $4/$20, Opus 4 $15/$75 per million input/output
+// tokens). Scores are from the blind-judged comparison in the README.
+const MODEL_CHOICES: { value: DrawModel; label: string; note: string }[] = [
+  {
+    value: "groq",
+    label: "Groq",
+    note: "Model open-source lewat Groq (default openai/gpt-oss-120b, bisa diganti dengan GROQ_MODEL). Sangat cepat dan murah, tapi kualitas gambarnya belum diuji. Tier gratis Groq punya batas token per menit yang rendah, jadi set besar bisa lambat.",
+  },
+  {
+    value: "haiku",
+    label: "Haiku",
+    note: "Claude Haiku: model Claude termurah. Skor uji buta 5,0 dari 10.",
+  },
+  {
+    value: "sonnet",
+    label: "Sonnet",
+    note: "Claude Sonnet: sekitar 20× biaya Haiku. Paling akurat dalam uji buta (6,3 dari 10).",
+  },
+  {
+    value: "opus",
+    label: "Opus",
+    note: "Claude Opus: sekitar 40× biaya Haiku. Setara Sonnet dalam uji buta (6,3 dari 10).",
+  },
+  {
+    value: "opus4",
+    label: "Opus 4",
+    note: "Claude Opus 4: model lama yang sudah deprecated dan bisa dihentikan Anthropic sewaktu-waktu. Sekitar 150× biaya Haiku.",
+  },
 ];
 
 export function VectorGenerator() {
@@ -248,21 +270,24 @@ export function VectorGenerator() {
             legend="Model penggambar"
             options={MODEL_CHOICES}
             value={drawModel}
-            onChange={setDrawModel}
+            onChange={(model) => {
+              setDrawModel(model);
+              if (model === "groq") setRefinements(0);
+            }}
             disabled={running}
-            hint={`${
-              drawModel === "opus4"
-                ? "Opus 4 adalah model lama yang sudah deprecated dan bisa dihentikan Anthropic sewaktu-waktu."
-                : "Model yang lebih kuat menggambar lebih akurat, tapi lebih lambat dan lebih mahal."
-            } Biaya per gambar ${DRAW_MODEL_LABELS[drawModel]} kira-kira ${MODEL_CHOICES.find((m) => m.value === drawModel)?.cost} biaya Haiku.`}
+            hint={MODEL_CHOICES.find((m) => m.value === drawModel)?.note}
           />
           <Picker
             legend="Perbaikan visual per gambar"
             options={REFINEMENT_CHOICES}
             value={refinements}
             onChange={setRefinements}
-            disabled={running}
-            hint={`Setiap putaran, model melihat hasil render-nya sendiri lalu memperbaikinya. Total sekitar ${count * (1 + refinements)} panggilan ke ${DRAW_MODEL_LABELS[drawModel]}, plus 1 ke Claude Haiku untuk perencanaan.`}
+            disabled={running || drawModel === "groq"}
+            hint={
+              drawModel === "groq"
+                ? `Perbaikan visual mengirim hasil render sebagai gambar, sedangkan model Groq default hanya membaca teks. Total sekitar ${count} panggilan ke Groq, plus 1 untuk perencanaan.`
+                : `Setiap putaran, model melihat hasil render-nya sendiri lalu memperbaikinya. Total sekitar ${count * (1 + refinements)} panggilan ke ${DRAW_MODEL_LABELS[drawModel]}, plus 1 ke Claude Haiku untuk perencanaan.`
+            }
           />
 
           {running ? (

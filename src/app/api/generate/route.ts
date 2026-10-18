@@ -7,22 +7,20 @@ import {
   parseGenerateRequest,
   type GenerateEvent,
 } from "@/lib/generate-types";
+import { missingCredentials, providerOf } from "@/lib/model-sessions";
 
 // A set of 100 drawings with refinements can take several minutes.
 export const maxDuration = 800;
 
 export async function POST(request: Request) {
-  if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
-    return Response.json(
-      { error: "ANTHROPIC_API_KEY belum diatur di server (.env.local)." },
-      { status: 500 },
-    );
-  }
-
   const body: unknown = await request.json().catch(() => null);
   const parsed = parseGenerateRequest(body);
   if (!parsed.ok) {
     return Response.json({ error: parsed.error }, { status: 400 });
+  }
+  const missing = missingCredentials(providerOf(parsed.value.drawModel));
+  if (missing) {
+    return Response.json({ error: missing }, { status: 500 });
   }
 
   const encoder = new TextEncoder();

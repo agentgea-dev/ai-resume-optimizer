@@ -5,10 +5,11 @@ export const DEFAULT_COUNT = MAX_COUNT;
 export const MAX_REFINEMENTS = 2;
 export const DEFAULT_REFINEMENTS = 0;
 
-export const DRAW_MODELS = ["haiku", "sonnet", "opus", "opus4"] as const;
+export const DRAW_MODELS = ["groq", "haiku", "sonnet", "opus", "opus4"] as const;
 export type DrawModel = (typeof DRAW_MODELS)[number];
-export const DEFAULT_DRAW_MODEL: DrawModel = "haiku";
+export const DEFAULT_DRAW_MODEL: DrawModel = "groq";
 export const DRAW_MODEL_LABELS: Record<DrawModel, string> = {
+  groq: "Groq",
   haiku: "Claude Haiku",
   sonnet: "Claude Sonnet",
   opus: "Claude Opus",
@@ -67,6 +68,14 @@ export function parseGenerateRequest(
     return {
       ok: false,
       error: `Model penggambar harus salah satu dari: ${DRAW_MODELS.join(", ")}.`,
+    };
+  }
+  // Visual refinement sends the render as an image, and the default Groq
+  // models are text-only.
+  if (drawModel === "groq" && refinements > 0) {
+    return {
+      ok: false,
+      error: "Perbaikan visual belum tersedia untuk Groq. Pilih 0 putaran.",
     };
   }
   return {
