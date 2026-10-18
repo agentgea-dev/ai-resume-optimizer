@@ -1,5 +1,10 @@
 import Anthropic from "@anthropic-ai/sdk";
-import type { GenerateEvent, GenerateRequest } from "@/lib/generate-types";
+import {
+  DRAW_MODEL_LABELS,
+  type DrawModel,
+  type GenerateEvent,
+  type GenerateRequest,
+} from "@/lib/generate-types";
 import {
   DRAW_SYSTEM_PROMPT,
   PLAN_SCHEMA,
@@ -15,8 +20,16 @@ import {
 } from "@/lib/prompts";
 import { extractSvg, renderPng } from "@/lib/svg";
 
-const MODEL = "claude-haiku-5-5";
-// Haiku 5.5 defaults to medium; set explicitly so it is easy to tune.
+// Planning is a cheap list-making step; only the drawing model is selectable.
+const PLAN_MODEL = "claude-haiku-5-5";
+// Haiku 5.5 has no server-side fallback. Sonnet 5.5 and Opus 5.5 retry a
+// declined drawing on Anthropic's recommended model instead of failing it.
+const DRAW_MODEL_IDS: Record<DrawModel, { id: string; fallback: boolean }> = {
+  haiku: { id: "claude-haiku-5-5", fallback: false },
+  sonnet: { id: "claude-sonnet-5-5", fallback: true },
+  opus: { id: "claude-opus-5-5", fallback: true },
+};
+// Set explicitly: Haiku 5.5 and Opus 5.5 default to medium, Sonnet 5.5 to high.
 const EFFORT = "medium";
 // Drawings run in parallel; keep this under the account's requests-per-minute limit.
 const CONCURRENCY = 8;
@@ -31,7 +44,7 @@ export class UserFacingError extends Error {}
 // A failed drawing is reported and skipped; errors that would fail every
 // drawing (bad key, bad request) stop the whole set.
 export async function generateVectorSet(
-  { prompt, count, refinements }: GenerateRequest,
+  { prompt, count, refinements, drawModel }: GenerateRequest,
   emit: (event: GenerateEvent) => void,
   signal: AbortSignal,
 ): Promise<void> {
@@ -57,10 +70,10 @@ export async function generateVectorSet(
   });
   emit({
     type: "status",
-    message: `Menggambar ${items.length} vektor, ${Math.min(CONCURRENCY, items.length)} sekaligus…`,
+    message: `Menggambar ${items.length} vektor dengan ${DRAW_MODEL_LABELS[drawModel]}, ${Math.min(CONCURRENCY, items.length)} sekaligus…`,
   });
 
-  const system: Anthropic.TextBlockParam[] = [
+  const system: Anthropic.Beta.BetaTextBlockParam[] = [
     { type: "text", text: DRAW_SYSTEM_PROMPT },
     {
       type: "text",
@@ -77,7 +90,14 @@ export async function generateVectorSet(
   try {
     await forEachConcurrent(items, CONCURRENCY, stopAll.signal, async (item, index) => {
       try {
-        const result = await drawItem(client, system, item, refinements, stopAll.signal);
+        const result = await drawItem(
+          client,
+          DRAW_MODEL_IDS[drawModel],
+          system,
+          item,
+          refinements,
+          stopAll.signal,
+        );
         succeeded++;
         emit({ type: "item", index, ...result });
       } catch (error) {
@@ -116,7 +136,7 @@ async function planSet(
     const reply = await client.messages
       .stream(
         {
-          model: MODEL,
+          model: PLAN_MODEL,
           max_tokens: 32_000,
           output_config: {
             effort: EFFORT,
@@ -191,12 +211,13 @@ function parsePlan(text: string): { style: SetStyle; items: SetItem[] } | null {
 
 async function drawItem(
   client: Anthropic,
-  system: Anthropic.TextBlockParam[],
+  model: { id: string; fallback: boolean },
+  system: Anthropic.Beta.BetaTextBlockParam[],
   item: SetItem,
   refinements: number,
   signal: AbortSignal,
 ): Promise<{ svg: string; note: string }> {
-  const messages: Anthropic.MessageParam[] = [
+  const messages: Anthropic.Beta.BetaMessageParam[] = [
     { role: "user", content: drawItemPrompt(item) },
   ];
   // Asserted rather than annotated so TS keeps the union across loop iterations.
@@ -206,14 +227,18 @@ async function drawItem(
   let repairs = 0;
 
   for (;;) {
-    const reply = await client.messages
+    const reply = await client.beta.messages
       .stream(
         {
-          model: MODEL,
+          model: model.id,
           max_tokens: 16_000,
           output_config: { effort: EFFORT },
           system,
           messages,
+          ...(model.fallback && {
+            betas: ["server-side-fallback-2026-07-01"],
+            fallbacks: "default",
+          }),
         },
         { signal },
       )
@@ -281,7 +306,7 @@ async function forEachConcurrent<T>(
   );
 }
 
-function replyText(reply: Anthropic.Message): string {
+function replyText(reply: Anthropic.Message | Anthropic.Beta.BetaMessage): string {
   return reply.content
     .flatMap((block) => (block.type === "text" ? [block.text] : []))
     .join("\n");

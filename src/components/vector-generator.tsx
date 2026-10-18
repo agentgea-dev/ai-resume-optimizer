@@ -19,9 +19,12 @@ import {
 import {
   COUNT_OPTIONS,
   DEFAULT_COUNT,
+  DEFAULT_DRAW_MODEL,
   DEFAULT_REFINEMENTS,
+  DRAW_MODEL_LABELS,
   MAX_PROMPT_LENGTH,
   MAX_REFINEMENTS,
+  type DrawModel,
   type GenerateEvent,
 } from "@/lib/generate-types";
 import { cn } from "@/lib/utils";
@@ -40,15 +43,24 @@ const EXAMPLES = [
   "Transportasi kota",
 ];
 
-const REFINEMENT_OPTIONS = Array.from(
-  { length: MAX_REFINEMENTS + 1 },
-  (_, n) => n,
-);
+const COUNT_CHOICES = COUNT_OPTIONS.map((n) => ({ value: n, label: String(n) }));
+const REFINEMENT_CHOICES = Array.from({ length: MAX_REFINEMENTS + 1 }, (_, n) => ({
+  value: n,
+  label: String(n),
+}));
+// Relative cost per drawing at list price (Haiku 5.5 $0.10/$0.50, Sonnet 5.5
+// $2/$10, Opus 5.5 $4/$20 per million input/output tokens).
+const MODEL_CHOICES: { value: DrawModel; label: string; cost: string }[] = [
+  { value: "haiku", label: "Haiku", cost: "1×" },
+  { value: "sonnet", label: "Sonnet", cost: "20×" },
+  { value: "opus", label: "Opus", cost: "40×" },
+];
 
 export function VectorGenerator() {
   const [prompt, setPrompt] = useState("");
   const [count, setCount] = useState<number>(DEFAULT_COUNT);
   const [refinements, setRefinements] = useState(DEFAULT_REFINEMENTS);
+  const [drawModel, setDrawModel] = useState<DrawModel>(DEFAULT_DRAW_MODEL);
   const [running, setRunning] = useState(false);
   const [log, setLog] = useState<string[]>([]);
   const [items, setItems] = useState<Item[]>([]);
@@ -114,7 +126,7 @@ export function VectorGenerator() {
       const response = await fetch("/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ prompt, count, refinements }),
+        body: JSON.stringify({ prompt, count, refinements, drawModel }),
         signal: abort.signal,
       });
       if (!response.ok || !response.body) {
@@ -226,18 +238,26 @@ export function VectorGenerator() {
 
           <Picker
             legend="Jumlah gambar"
-            options={COUNT_OPTIONS}
+            options={COUNT_CHOICES}
             value={count}
             onChange={setCount}
             disabled={running}
           />
           <Picker
+            legend="Model penggambar"
+            options={MODEL_CHOICES}
+            value={drawModel}
+            onChange={setDrawModel}
+            disabled={running}
+            hint={`Model yang lebih kuat menggambar lebih akurat, tapi lebih lambat dan lebih mahal. Biaya per gambar ${DRAW_MODEL_LABELS[drawModel]} kira-kira ${MODEL_CHOICES.find((m) => m.value === drawModel)?.cost} biaya Haiku.`}
+          />
+          <Picker
             legend="Perbaikan visual per gambar"
-            options={REFINEMENT_OPTIONS}
+            options={REFINEMENT_CHOICES}
             value={refinements}
             onChange={setRefinements}
             disabled={running}
-            hint={`Setiap putaran, model melihat hasil render-nya sendiri lalu memperbaikinya. Total sekitar ${count * (1 + refinements) + 1} panggilan ke Claude Haiku.`}
+            hint={`Setiap putaran, model melihat hasil render-nya sendiri lalu memperbaikinya. Total sekitar ${count * (1 + refinements)} panggilan ke ${DRAW_MODEL_LABELS[drawModel]}, plus 1 ke Claude Haiku untuk perencanaan.`}
           />
 
           {running ? (
@@ -369,7 +389,7 @@ export function VectorGenerator() {
   );
 }
 
-function Picker({
+function Picker<T extends string | number>({
   legend,
   options,
   value,
@@ -378,9 +398,9 @@ function Picker({
   hint,
 }: {
   legend: string;
-  options: readonly number[];
-  value: number;
-  onChange: (value: number) => void;
+  options: readonly { value: T; label: string }[];
+  value: T;
+  onChange: (value: T) => void;
   disabled: boolean;
   hint?: string;
 }) {
@@ -395,18 +415,18 @@ function Picker({
       >
         {options.map((option) => (
           <button
-            key={option}
+            key={option.value}
             type="button"
-            aria-pressed={value === option}
-            onClick={() => onChange(option)}
+            aria-pressed={value === option.value}
+            onClick={() => onChange(option.value)}
             className={cn(
               "rounded-md py-1.5 text-sm transition-colors disabled:opacity-60",
-              value === option
+              value === option.value
                 ? "bg-background font-medium shadow-sm"
                 : "text-muted-foreground hover:text-foreground",
             )}
           >
-            {option}
+            {option.label}
           </button>
         ))}
       </div>

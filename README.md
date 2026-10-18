@@ -39,7 +39,8 @@ Buka http://localhost:3000.
 
 ## Model, waktu, dan biaya
 
-- Model: `claude-haiku-5-5`, effort `medium` (`src/lib/generate-vector.ts`). Haiku 5.5 tidak punya server-side fallback, jadi permintaan yang ditolak classifier keamanan ditandai gagal per gambar.
+- Perencanaan selalu memakai `claude-haiku-5-5`. Model penggambar dipilih di UI: Haiku (`claude-haiku-5-5`, default), Sonnet (`claude-sonnet-5-5`), atau Opus (`claude-opus-5-5`), semuanya dengan effort `medium` (`src/lib/generate-vector.ts`). Model yang lebih kuat menggambar lebih akurat. Biaya per gambar kira-kira 1× / 20× / 40× menurut harga per token.
+- Sonnet dan Opus memakai server-side fallback (`fallbacks: "default"`), jadi gambar yang ditolak classifier keamanan dicoba ulang di model lain. Haiku 5.5 tidak punya fallback, jadi penolakan ditandai gagal per gambar.
 - Satu set = 1 panggilan perencanaan + `N × (1 + putaran perbaikan)` panggilan menggambar (ditambah perbaikan SVG tidak valid bila perlu). 100 gambar tanpa perbaikan ≈ 101 panggilan.
 - `CONCURRENCY = 8` menjaga laju di bawah batas requests-per-minute akun tingkat awal; naikkan kalau tier akun Anda lebih tinggi. SDK otomatis mencoba ulang 429/5xx sampai 5 kali.
 - Route mengizinkan sampai 800 detik (`maxDuration`). Batas sebenarnya di hosting (mis. Vercel) tergantung paket.
