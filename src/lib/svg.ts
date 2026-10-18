@@ -5,10 +5,13 @@ const MAX_SVG_BYTES = 200_000;
 
 // Flat shapes only. Anything that can load resources or run code (script,
 // image, use, a, foreignObject, animate, style) stays out, so a generated
-// file is safe to open directly in a browser.
+// file is safe to open directly in a browser. clipPath is allowed for cel
+// shading; it can only be referenced from inside the file (see url() below).
 const ALLOWED_ELEMENTS = new Set([
   "svg",
   "g",
+  "defs",
+  "clipPath",
   "rect",
   "circle",
   "ellipse",
@@ -23,7 +26,10 @@ const ALLOWED_ELEMENTS = new Set([
 const FORBIDDEN_PATTERNS: { pattern: RegExp; reason: string }[] = [
   { pattern: /\son[a-z]+\s*=/i, reason: "atribut event (on...)" },
   { pattern: /(^|[\s:])href\s*=/i, reason: "atribut href" },
-  { pattern: /url\s*\(/i, reason: "referensi url()" },
+  {
+    pattern: /url\s*\((?!\s*['"]?#)/i,
+    reason: "url() yang menunjuk ke luar file",
+  },
   { pattern: /javascript:/i, reason: "URL javascript:" },
   { pattern: /<!(?!--)/, reason: "deklarasi DOCTYPE/ENTITY/CDATA" },
   { pattern: /<\?(?!xml\s)/, reason: "processing instruction" },
