@@ -1,6 +1,6 @@
 import {
   describeError,
-  generateVector,
+  generateVectorSet,
   UserFacingError,
 } from "@/lib/generate-vector";
 import {
@@ -8,8 +8,8 @@ import {
   type GenerateEvent,
 } from "@/lib/generate-types";
 
-// Each round is one model call; a full run with 3 refinements can take minutes.
-export const maxDuration = 300;
+// A set of 100 drawings with refinements can take several minutes.
+export const maxDuration = 800;
 
 export async function POST(request: Request) {
   if (!process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_AUTH_TOKEN) {
@@ -37,8 +37,7 @@ export async function POST(request: Request) {
       };
 
       try {
-        await generateVector(parsed.value, emit, abort.signal);
-        emit({ type: "done" });
+        await generateVectorSet(parsed.value, emit, abort.signal);
       } catch (error) {
         if (abort.signal.aborted) return;
         if (!(error instanceof UserFacingError)) {

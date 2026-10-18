@@ -1,14 +1,15 @@
 # Vektor AI
 
-Ubah deskripsi teks menjadi ilustrasi SVG yang bisa diedit. Claude menggambar SVG dari bentuk-bentuk dasar, lalu melihat hasil render-nya sendiri dan memperbaiki bagian yang janggal.
+Tulis satu tema, dapatkan satu set ilustrasi SVG yang bisa diedit (sampai 100 gambar sekali jalan). Claude Haiku menyusun daftar subjek yang berhubungan dengan tema beserta satu gaya visual bersama, lalu menggambar setiap subjek dari bentuk-bentuk dasar.
 
 ## Cara kerja
 
-1. **Rancang dan gambar.** Claude menulis rencana singkat (objek, bagian, bentuk, warna, posisi), lalu menulis SVG di kanvas 512×512 memakai `rect`, `circle`, `ellipse`, `line`, `polyline`, `polygon`, `path`, dan `g`.
-2. **Validasi.** Server menolak SVG yang memuat elemen atau atribut yang bisa menjalankan kode atau memuat sumber luar (`script`, `image`, `use`, `foreignObject`, `on*`, `href`, `url()`, DOCTYPE), lalu mem-parse-nya dengan resvg. SVG yang ditolak dikembalikan ke model untuk diperbaiki.
-3. **Perbaikan visual** (0–3 putaran, default 2). Server merender SVG ke PNG dengan [resvg](https://github.com/yisibl/resvg-js), mengirim gambar itu kembali ke Claude, dan Claude memperbaiki proporsi, posisi, bagian yang hilang, atau komposisi. Proses berhenti lebih awal kalau model tidak mengubah apa pun.
+1. **Perencanaan.** Satu panggilan ke Claude Haiku (structured output JSON) menghasilkan `N` subjek berbeda yang berhubungan dengan tema (struktur, peralatan, kendaraan, orang, proses, lingkungan, simbol), plus palet 5–8 warna dan catatan gaya untuk seluruh set. Kalau daftarnya kurang dari `N`, model diminta menambah (maksimal 2 kali); judul ganda dibuang.
+2. **Menggambar paralel.** Setiap subjek digambar dalam panggilan terpisah, 8 sekaligus. Aturan kanvas dan konteks set (tema, palet, gaya) ada di system prompt yang di-cache dan dipakai bersama oleh semua gambar.
+3. **Validasi.** Server menolak SVG yang memuat elemen atau atribut yang bisa menjalankan kode atau memuat sumber luar (`script`, `image`, `use`, `foreignObject`, `on*`, `href`, `url()`, DOCTYPE), lalu mem-parse-nya dengan resvg. SVG yang ditolak dikembalikan ke model sekali untuk diperbaiki.
+4. **Perbaikan visual** (0–2 putaran per gambar, default 0). Server merender SVG ke PNG dengan [resvg](https://github.com/yisibl/resvg-js) dan mengirimnya kembali ke model untuk dikoreksi.
 
-Setiap draf dikirim ke browser secara streaming, jadi pengguna bisa melihat dan membandingkan semua versi, lalu mengunduh SVG/PNG atau menyalin kodenya.
+Gambar yang gagal (ditolak model, SVG tetap tidak valid, atau error API setelah retry) ditandai di grid tanpa menghentikan gambar lain. Error yang pasti berulang untuk semua gambar (API key salah, request tidak valid) menghentikan seluruh set. Hasil bisa diunduh satu per satu (SVG/PNG) atau sekaligus sebagai ZIP.
 
 Pendekatan ini terinspirasi dari tahap 1 [Chat2SVG](https://github.com/kingnobro/chat2svg) (LLM menulis template SVG lalu memperbaikinya secara visual), tanpa tahap diffusion dan optimasi berbasis GPU.
 
@@ -29,15 +30,18 @@ Buka http://localhost:3000.
 | File | Isi |
 |---|---|
 | `src/app/page.tsx` | Halaman utama |
-| `src/components/vector-generator.tsx` | UI: form, progres, pratinjau, riwayat draf, unduh |
+| `src/components/vector-generator.tsx` | UI: form, progres, grid hasil, detail, unduh SVG/PNG/ZIP |
 | `src/app/api/generate/route.ts` | `POST /api/generate`, mengalirkan event NDJSON |
-| `src/lib/generate-vector.ts` | Pipeline Claude: gambar → validasi → render → perbaiki |
+| `src/lib/generate-vector.ts` | Pipeline: rencana set → gambar paralel → validasi → render → perbaiki |
 | `src/lib/prompts.ts` | System prompt dan prompt tiap tahap |
 | `src/lib/svg.ts` | Ekstraksi, validasi allowlist, dan render PNG |
 | `src/lib/generate-types.ts` | Tipe event, batas input, validasi request |
 
-## Model dan biaya
+## Model, waktu, dan biaya
 
-Pipeline memakai `claude-opus-5-5` dengan effort `medium` (`src/lib/generate-vector.ts`). Satu permintaan menjalankan 1 + jumlah putaran perbaikan panggilan model, dan setiap putaran mengirim ulang seluruh percakapan beserta gambarnya. Prompt caching aktif untuk menekan biaya input berulang. Server-side fallback (`fallbacks: "default"`) aktif, sehingga permintaan yang ditolak classifier keamanan dicoba ulang di model lain.
+- Model: `claude-haiku-5-5`, effort `medium` (`src/lib/generate-vector.ts`). Haiku 5.5 tidak punya server-side fallback, jadi permintaan yang ditolak classifier keamanan ditandai gagal per gambar.
+- Satu set = 1 panggilan perencanaan + `N × (1 + putaran perbaikan)` panggilan menggambar (ditambah perbaikan SVG tidak valid bila perlu). 100 gambar tanpa perbaikan ≈ 101 panggilan.
+- `CONCURRENCY = 8` menjaga laju di bawah batas requests-per-minute akun tingkat awal; naikkan kalau tier akun Anda lebih tinggi. SDK otomatis mencoba ulang 429/5xx sampai 5 kali.
+- Route mengizinkan sampai 800 detik (`maxDuration`). Batas sebenarnya di hosting (mis. Vercel) tergantung paket.
 
 > **Sebelum deploy publik:** endpoint `/api/generate` belum punya autentikasi atau rate limit. Siapa pun yang tahu URL-nya bisa memakai kredit API Anda.
